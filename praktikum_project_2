@@ -1,0 +1,389 @@
+
+
+# # Исследование объявлений о продаже квартир
+# 
+# В вашем распоряжении данные сервиса Яндекс.Недвижимость — архив объявлений о продаже квартир в Санкт-Петербурге и соседних населённых пунктов за несколько лет. Нужно научиться определять рыночную стоимость объектов недвижимости. Ваша задача — установить параметры. Это позволит построить автоматизированную систему: она отследит аномалии и мошенническую деятельность. 
+# 
+# По каждой квартире на продажу доступны два вида данных. Первые вписаны пользователем, вторые — получены автоматически на основе картографических данных. Например, расстояние до центра, аэропорта, ближайшего парка и водоёма. 
+
+#
+# ### Шаг 1. Откройте файл с данными и изучите общую информацию. 
+
+import pandas as pd
+df = pd.read_csv('/datasets/real_estate_data.csv', sep='\t')
+
+df.info()
+
+df.head(15)
+
+
+# ### Вывод
+
+# Достаточно детально изучили наши первичные данные, давай теперь их обработаем.
+
+
+# ### Шаг 2. Предобработка данных
+
+
+#Определяем есть ли пропущенные значения
+df.isna().mean()
+
+
+#заполним количество этажей медианой
+df_floors_median = df['floors_total'].median()
+df['floors_total'] = df['floors_total'].fillna(value=df_floors_median)
+df.head(10)
+
+
+df['ceiling_height'].describe()
+
+
+#Заменим пропуски в высоте потолков на медиану в разрезе этажности
+df['ceiling_height'] = df['ceiling_height'].fillna(df.groupby('floors_total')['ceiling_height'].transform('median'))
+
+
+# Отлично, ввиду того что схожие дома обладают близкими характеристиками, мы можем использовать такой способ обработки пропусков. 
+
+
+#Заполним пропуски в столбцах число балконов и parks_around3000, parks_nearest, ponds_around3000, ponds_nearest, 
+
+df.fillna({'parks_around3000':'0', 'ponds_nearest':'0', 'parks_nearest':'0', 'ponds_around3000':'0', 'balcony':'0'}, inplace=True)
+df.head(10)
+
+# Посмотрим на типы данных в таблице
+df.dtypes
+
+
+# <li>last_price приведем к целочисленному формату так как это будет наиболее приемлемо для проведения анализа
+# <li>first_day_exposition приведем к формату даты так как на данный момент формат не приемленен для проведения анализа
+# <li>floors_total приведем к целочисленному формату приведем к целочисленному формату так как это будет наиболее приемлемо для проведения анализа
+# <li>balcony приведем к целочисленному формату приведем к целочисленному формату так как это будет наиболее приемлемо для проведения анализа
+# <li>days_exposition приведем к целочисленному формату приведем к целочисленному формату так как это будет наиболее приемлемо для проведения анализа
+# <li>parks_around3000, parks_nearest, ponds_around3000, ponds_nearest также приведем к формату int
+
+# In[10]:
+
+
+df[['last_price', 
+    #'floors_total', 
+    'balcony', 
+    #'days_exposition', 
+    'parks_around3000',
+    'parks_nearest',
+    'ponds_around3000',
+    'ponds_nearest']] = df[['last_price', 
+                             #'floors_total', 
+                              'balcony',                                       
+                              #'days_exposition',
+                              'parks_around3000',
+                              'parks_nearest',
+                              'ponds_around3000',
+                              'ponds_nearest']].astype('int')
+df['first_day_exposition'] = pd.to_datetime(df['first_day_exposition'])
+
+
+
+#Заполним пропуски жилого пространства
+df['living'] = (df['living_area']/df['total_area'])
+
+
+df['living'] = df['living'].fillna(df.groupby('rooms')['living'].transform('mean'))
+
+
+df_living = df['living']*df['total_area']
+df['living_area'] = df['living_area'].fillna(value=df_living)
+
+
+#Заменим пропуски в площади кухни
+df['kitchen'] = (df['kitchen_area']/df['total_area'])
+df['kitchen'] = df['kitchen'].fillna(df.groupby('rooms')['kitchen'].transform('mean'))
+df_kitchen = df['kitchen']*df['total_area']
+df['kitchen_area'] = df['kitchen_area'].fillna(value=df_kitchen)
+
+
+# ### Шаг 3. Посчитайте и добавьте в таблицу
+
+
+#Добавим в таблицу цену квадратного метра
+df['price per square meter']=df['last_price']/df['total_area']
+#Добавим 3 отдельных столбца, с годом, месяцем и днём
+df['year'] = df['first_day_exposition'].dt.year
+df['month'] = df['first_day_exposition'].dt.month
+df['day'] = df['first_day_exposition'].dt.dayofweek
+
+
+#Добавим категории этажей
+def floor_category(row):
+    if row['floor'] == 1:
+        return 'первый'
+    elif row['floor'] == row['floors_total']:
+        return 'последний'
+    else:
+        return 'другой'
+df['floor_category'] = df.apply(floor_category, axis=1)
+df.head(15)
+
+#Посчитаем отношение жилой площади к общей площади
+df['living_area_%'] = df['living_area']/df['total_area']
+#Посчитаем отношение площади кухни к общей площади
+df['kitchen_area_%'] = df['kitchen_area']/df['total_area']
+df.head(5)
+
+
+# Добавили необходимые метрики для проведения дальнейшего исследования
+
+
+# ### Шаг 4. Проведите исследовательский анализ данных и выполните инструкции:
+
+
+#Импортируем библиотеку
+import matplotlib.pyplot as plt
+
+
+#Посторим гистограммы для следующих параметров
+for columns in ['total_area','last_price','ceiling_height']:
+    q3 = df[columns].quantile(q=0.75)
+    df[columns].hist(bins=100, range=(0, q3*3), figsize=(10, 5))
+    plt.title(columns)
+    plt.show()
+
+
+# Видим мощный пик около 50.Это наиболее популярная площадь которую продают пользователи. Также видим, что средней значение и медиана в данных имеют близкое значение - это значит, что выбросов в данных немного.
+
+# Видим мощный пик в районе 4 миллионов. Видим значительную разницу между средней и медианой, это указывает на значительные выбросы в данных. Это также видно на первом графике
+
+# Видим что наиболее популярная высота потолков от 2.7 до 3.3. Количество выбросов незначительно
+
+
+#Изучим время продажи квартиры.
+df.hist("days_exposition", bins=50,range=(0,1500),figsize=(10, 5))
+plt.show()
+
+
+df.hist("days_exposition", bins=10,range=(0,200),figsize=(10, 5))
+plt.show()
+
+
+# Пик приходится от 0 до 20. Посмотрим сколько объявлений с 0 значением. Скорре всего эти объявлений были сняты в день размещения 
+
+
+len(df.query('days_exposition == 0'))
+
+
+#откинем 0 значения из df
+df_not_0=df.query('days_exposition !=0')
+
+
+#Построим гистограмму по значениям без 0
+df_not_0.hist('days_exposition', bins=45,range=(0,400),figsize=(10, 5))
+plt.show()
+
+
+# Пик приходится на период 50 дней. Посмотрим на среднюю и медиану df без нулевых значений
+
+
+
+df_not_0['days_exposition'].agg(['median','mean'])
+
+
+# Среднее и медиана показывает нам, что квартиру чаще всего продают в среднем за 180 дней, но учитывая достаточное количество выбросов, будем ориентироваться на медиану - 95 дней.
+
+
+
+df_not_0.hist('days_exposition', bins=45,range=(0,50),figsize=(10, 5))
+plt.show()
+
+
+df_not_0['days_exposition'].describe()
+
+
+# Можно считать что прдажи прошли очень быстро  - от 1 дня до 45 дней - первый квартиль
+# Можно считать что продажи проходили долго - от 232 до 1580 дней
+
+
+df.sample()
+
+
+#найдем в столбцах редкие и выбивающиеся значения
+df.describe()
+
+
+import warnings
+warnings.filterwarnings('ignore')
+
+
+df.boxplot(column=['total_area'], rot=45, fontsize=15)
+
+
+df.boxplot(column=['ceiling_height'], rot=45, fontsize=15)
+
+
+df.boxplot(column=['last_price'], rot=45, fontsize=15)
+
+
+import numpy as np
+
+data = df
+
+
+#Удалим выбросы
+df.loc[(df.ceiling_height > 40), ['ceiling_height']] = np.nan
+df.loc[(df.total_area > 600), ['total_area']] = np.nan
+df.loc[(df.last_price > 70000000), ['last_price']] = np.nan
+
+
+# Убрали выбивающие значения - это нам поможет в дальнейщем исследовании и делать мы его теперь будем в пределах нового датафрейма
+
+
+#Посмотрим что влияет на цену
+data['total_area'].corr(data['last_price'])
+
+
+data['rooms'].corr(data['last_price'])
+
+
+data['cityCenters_nearest'].corr(data['last_price'])
+
+
+data.plot(kind='scatter',x='cityCenters_nearest',y='last_price')
+
+
+data.groupby('floor_category')['last_price'].agg(['count','median'])
+
+
+# Наибольшая положительная корреляция с ценой видна у площади квартиры, затем идет количество комнат. Корреляция по отдаленности от центра отрицательная она сигнализирует о том что чем больше отдаленность от центра тем дешевле квартиры. Наблюдается зависимость также от категории этажа - первы самый дешевый, затем по стоимости идет последний, а самые дорогие это этажи между первым и последним.
+
+#изучим зависимость от даты размещения: дня недели, месяца и года. Добавим столбец с днем недели
+days = {0:'Mon',1:'Tues',2:'Weds',3:'Thurs',4:'Fri',5:'Sat',6:'Sun'}
+data['day_of_week'] = data['day'].apply(lambda x: days[x])
+
+
+data.groupby('day_of_week')['last_price'].median().plot()
+
+
+data.groupby('month')['last_price'].median().plot()
+
+
+data.groupby('year')['last_price'].median().plot()
+
+
+# Пик размещений объявлений виден с воскресения до середины недели и падает к концу. Активные месяцы - весна, падение - лето, осень с активными пиками в сентябре и ноябре. Падение кол-ва предложений наблюдается с 2014 года, повышающийся тренд заметен с 2018.
+
+
+#Сохраним в переменную топ 10 городов, посчитаем среднюю цену квадратного метра
+local_top_10 = data['locality_name'].value_counts().sort_values(ascending=False).head(10)
+local_top_10
+
+local_top_10_data = data.query('locality_name in @local_top_10.index')
+local_top_10_data
+
+
+local_top_10_data.groupby('locality_name')['price per square meter'].mean().sort_values(ascending=False)
+
+
+#Выделим населённые пункты с самой высокой и низкой стоимостью жилья
+local_top_10_data.groupby('locality_name')['last_price'].max().sort_values(ascending=False)
+
+
+local_top_10_data.groupby('locality_name')['last_price'].min().sort_values()
+
+
+local_top_10_data.groupby('locality_name')['last_price'].median().sort_values().plot()
+plt.xticks(rotation=90)
+
+
+# Самая высокая стоимость за квадратный метр в Питере как и стоимость жилья. Самая низкая стоимость квадратного метра в Выборге как и стоимость жилья несморя на то что в Питере нашлось жилье за 12190 - но скорее всего это опечатка или ошибка.
+
+
+#Выделяем квартиры из Санкт - Петербурга
+data_piter = data.query('locality_name == "Санкт-Петербург"').copy()
+data_piter
+
+
+#Создадим столбец с расстоянием до центра в километрах: округлим до целых значений
+data_piter['cityCenters_nearest_km'] = (data_piter['cityCenters_nearest']/ 1000).round()
+
+
+#Находим среднюю цену для каждого километра
+data_piter.groupby('cityCenters_nearest_km')['last_price'].mean()
+
+
+#Постоим график цены удаленности от центра
+data_piter.groupby('cityCenters_nearest_km')['last_price'].mean().plot()
+
+
+# Видно, что график сильно меняется после преодолении отметки в районе 7 - 9 км - это можно считать центром. Далее наблдается постепенное падение цены в зависимости от удаленности.
+
+
+#Оставим квартиры относящиеся к центру
+data_piter.centre = data_piter.query('cityCenters_nearest_km < 7').copy()
+
+
+
+#Изучим следующие параметры
+for columns in ['last_price','rooms','total_area', 'ceiling_height']:
+    q3 = data_piter.centre[columns].quantile(q=0.75)
+    data_piter.centre[columns].hist(bins=100, range=(0, q3*3), figsize=(10, 5))
+    plt.title(columns)
+    plt.show()
+
+
+# Наибольшее количество предложений находится в районе 10 миллионов
+
+# Популярное количесво комнат от 2х до 4х
+
+# Наиболее популярная площадь в центре находится в районе от 50 до 100 кв метров
+
+# Популярная высота потолков от 2,3м до 2,7 м
+
+#Выделим факторы, влияющие на стоимость квартиры
+data_piter.centre.groupby('rooms')['last_price'].mean().plot()
+
+
+# Чем больше комнат, тем выше цена. Есть просадка на 15 комнатах, но это скорее всего из-за низкого кол-ва объявлений с данным предложением
+
+
+data_piter.centre.groupby('floor')['last_price'].mean().plot()
+
+
+# Ценник в среднем со 2 го этажа меняется без резких пиков и падений если этот этаж не последний. Низкий ценник у первых этажей. Чем выше этаж тем ценник выше, если он не последний
+
+
+data_piter.centre.groupby('cityCenters_nearest_km')['last_price'].mean().plot()
+
+
+# Самая высокая цена у квартир до 1 км от центра. От 1 до 2 ценник стабилен, потом цена падает на расстоянии до 3км (скорее всего это связано с отсутсвием достаточного кол-ва предложений с данной удаленностью),учитывая это можно считать что в предложниях от 3 до 6 км цена особо не меняется
+
+
+#Проанализируем зависимость от даты размещения
+data_piter.centre.groupby('day_of_week')['last_price'].median().plot()
+
+
+data_piter.centre.groupby('month')['last_price'].median().plot()
+
+
+data_piter.centre.groupby('year')['last_price'].median().plot()
+
+
+data_piter.centre[['last_price','floor','cityCenters_nearest_km','rooms','month','year']].corr()
+
+
+# Просматривается идентичная зависимость как и в общем датасете. 
+
+
+# ### Шаг 5. Общий вывод
+
+# На данном исследовании мы изучили файл с данными по объявлениям о продаже квартир, определили и обработали пропущенные значения, привели форматы значений к необхоимым, отработали выбросы, исследовали зависимость цены от параметров квартиры и удаленности
+# 
+# Наиболее популярная площад квартит от 50 до 100 кв. метров,<br>
+# Наиболее популярная высота потолков 2,7 м<br>
+# Среднее время продажи 95 дней<br>
+# Пик размещений объявлений виден с воскресения до середины недели и падает к концу недели<br>
+# Активные месяцы - весна, падение - лето, осень с активными пиками в сентябре и ноябре<br>
+# Наибольшее количество предложений находится в районе 10 миллионов<br>
+# Популярное количесво комнат от 2х до 4х<br>
+# Самая высокая цена у квартир до 1 км от центра так же как и стоимость квадратного метра<br>
+# Стоимость цены напрямую зависит от расстояния до центра и площади квартиры<br>
+
+
+
